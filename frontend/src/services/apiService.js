@@ -4,10 +4,10 @@ export const ACCESS_TOKEN_KEY = 'access_token'
 export const REFRESH_TOKEN_KEY = 'refresh_token'
 export const USER_KEY = 'auth_user'
 
-const baseURL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
+export const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000'
 
 const apiService = axios.create({
-  baseURL,
+  baseURL: API_BASE_URL,
   headers: { 'Content-Type': 'application/json' },
 })
 
@@ -27,7 +27,7 @@ apiService.interceptors.response.use(
     if (error.response?.status === 401 && refreshToken && !request?._retry) {
       request._retry = true
       try {
-        const response = await axios.post(`${baseURL}/auth/refresh`, {
+        const response = await axios.post(`${API_BASE_URL}/auth/refresh`, {
           refresh_token: refreshToken,
         })
         const token = response.data.access_token
