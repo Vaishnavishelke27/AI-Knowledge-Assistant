@@ -1,6 +1,7 @@
 fastapi
 uvicorn[standard]
 langchain
+langchain-text-splitters
 llama-index
 openai
 qdrant-client
@@ -15,5 +16,6 @@ pypdf
 python-docx
 openpyxl
 python-pptx
+python-multipart
 sentence-transformers
 pydantic-settings
