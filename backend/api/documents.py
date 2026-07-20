@@ -15,7 +15,8 @@ from backend.core.auth import get_current_user
 from backend.db.session import get_db
 from backend.models.document import Document
 from backend.models.user import User, UserRole
-from backend.services.document_processor import PARSERS, process_document
+from backend.services.document_processor import DocumentChunk, PARSERS, process_document
+from backend.services.vector_store import vector_store
 
 router = APIRouter(prefix="/documents", tags=["documents"])
 UPLOAD_DIR = Path("uploads").resolve()
@@ -67,7 +68,13 @@ def upload_document(
     try:
         with stored_path.open("wb") as destination:
             shutil.copyfileobj(file.file, destination)
-        chunks = process_document(stored_path)
+        chunks = [
+            DocumentChunk(
+                text=chunk.text,
+                metadata={**chunk.metadata, "source": original_name},
+            )
+            for chunk in process_document(stored_path)
+        ]
         if not chunks:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
@@ -79,10 +86,13 @@ def upload_document(
             file_type=extension,
             storage_path=str(stored_path),
             uploader_id=current_user.id,
-            status="processed",
+            status="processing",
             chunks=[chunk.to_dict() for chunk in chunks],
         )
         db.add(document)
+        db.flush()
+        vector_store.store_chunks(document.id, chunks)
+        document.status = "indexed"
         db.commit()
         db.refresh(document)
         return serialize_document(document)
@@ -112,6 +122,35 @@ def list_documents(db: DbSession, current_user: CurrentUser) -> list[DocumentRes
     del current_user
     documents = db.scalars(select(Document).order_by(Document.created_at.desc())).all()
     return [serialize_document(document) for document in documents]
+
+
+@router.post("/recreate-index")
+def recreate_index(db: DbSession, current_user: AdminUser) -> dict[str, int | str]:
+    del current_user
+    documents = db.scalars(select(Document).order_by(Document.id)).all()
+    prepared = [
+        (
+            document.id,
+            [
+                DocumentChunk(text=chunk["text"], metadata=chunk.get("metadata", {}))
+                for chunk in document.chunks
+                if chunk.get("text")
+            ],
+        )
+        for document in documents
+    ]
+    try:
+        indexed_chunks = vector_store.recreate_index(prepared)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Vector index could not be rebuilt",
+        ) from exc
+    return {
+        "status": "rebuilt",
+        "documents": len(documents),
+        "chunks": indexed_chunks,
+    }
 
 
 @router.delete("/{document_id}", status_code=status.HTTP_204_NO_CONTENT)
