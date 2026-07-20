@@ -1,0 +1,14 @@
+fastapi
+uvicorn[standard]
+SQLAlchemy
+asyncpg
+redis
+python-jose[cryptography]
+passlib[bcrypt]
+langchain
+llama-index
+openai
+qdrant-client
+python-multipart
+unstructured
+pydantic-settings
