@@ -118,7 +118,9 @@ class VectorStore:
             )
         return len(chunks)
 
-    def search_similar(self, query: str, top_k: int = 5) -> list[dict[str, Any]]:
+    def search_similar(
+        self, query: str, top_k: int = 5, document_ids: Sequence[int] | None = None
+    ) -> list[dict[str, Any]]:
         if top_k < 1:
             raise ValueError("top_k must be at least 1")
         vector = self.embeddings.embed([query])[0]
@@ -130,6 +132,18 @@ class VectorStore:
                 query=vector,
                 limit=top_k,
                 with_payload=True,
+                query_filter=(
+                    models.Filter(
+                        must=[
+                            models.FieldCondition(
+                                key="document_id",
+                                match=models.MatchAny(any=list(document_ids)),
+                            )
+                        ]
+                    )
+                    if document_ids
+                    else None
+                ),
             ).points
             return [
                 {
@@ -141,7 +155,12 @@ class VectorStore:
             ]
 
         result = self._chroma.query(
-            query_embeddings=[vector], n_results=top_k, include=["documents", "metadatas", "distances"]
+            query_embeddings=[vector],
+            n_results=top_k,
+            where=(
+                {"document_id": {"$in": list(document_ids)}} if document_ids else None
+            ),
+            include=["documents", "metadatas", "distances"],
         )
         documents = (result.get("documents") or [[]])[0]
         metadatas = (result.get("metadatas") or [[]])[0]
@@ -221,5 +240,7 @@ def store_chunks(document_id: int, chunks: Sequence[DocumentChunk]) -> int:
     return vector_store.store_chunks(document_id, chunks)
 
 
-def search_similar(query: str, top_k: int = 5) -> list[dict[str, Any]]:
-    return vector_store.search_similar(query, top_k)
+def search_similar(
+    query: str, top_k: int = 5, document_ids: Sequence[int] | None = None
+) -> list[dict[str, Any]]:
+    return vector_store.search_similar(query, top_k, document_ids)

@@ -1,6 +1,7 @@
 import json
 import os
 from dataclasses import asdict, dataclass
+from collections.abc import Sequence
 from typing import Any
 from urllib.error import URLError
 from urllib.request import Request, urlopen
@@ -15,6 +16,9 @@ RAG_PROMPT = PromptTemplate.from_template(
     """You are an enterprise knowledge assistant. Answer only from the supplied context.
 If the context does not contain the answer, say that you do not have enough information.
 Cite factual statements using the context labels exactly as [1], [2], and so on.
+
+Conversation history:
+{history}
 
 Context:
 {context}
@@ -128,8 +132,14 @@ class RAGEngine:
                     raise
         return self._ollama_completion(prompt)
 
-    def retrieval_qa_chain(self, question: str, top_k: int = 5) -> RAGResult:
-        results = search_similar(question, top_k=top_k)
+    def retrieval_qa_chain(
+        self,
+        question: str,
+        top_k: int = 5,
+        history: Sequence[dict[str, str]] | None = None,
+        document_ids: Sequence[int] | None = None,
+    ) -> RAGResult:
+        results = search_similar(question, top_k=top_k, document_ids=document_ids)
         if not results:
             return RAGResult(
                 answer="I do not have enough information in the knowledge base to answer that question.",
@@ -153,13 +163,38 @@ class RAGEngine:
                 f"[{index}] Source: {citation.filename}, {_location(citation)}\n{result.get('text', '')}"
             )
 
-        prompt = RAG_PROMPT.format(context="\n\n".join(context_parts), question=question)
+        history_text = "\n".join(
+            f"{message['role'].title()}: {message['content']}" for message in history or []
+        ) or "No previous messages."
+        prompt = RAG_PROMPT.format(
+            context="\n\n".join(context_parts),
+            history=history_text,
+            question=question,
+        )
         answer = format_answer(self._generate(prompt), citations)
         return RAGResult(answer=answer, citations=[citation.to_dict() for citation in citations])
+
+    def generate_title(self, question: str, answer: str) -> str:
+        prompt = (
+            "Create a concise title of at most eight words for this conversation. "
+            "Return only the title, without quotation marks.\n\n"
+            f"User: {question}\nAssistant: {answer}"
+        )
+        title = self._generate(prompt).strip().strip('"\'').splitlines()[0]
+        return title[:255] or "New conversation"
 
 
 rag_engine = RAGEngine()
 
 
-def retrieval_qa_chain(question: str, top_k: int = 5) -> RAGResult:
-    return rag_engine.retrieval_qa_chain(question, top_k)
+def retrieval_qa_chain(
+    question: str,
+    top_k: int = 5,
+    history: Sequence[dict[str, str]] | None = None,
+    document_ids: Sequence[int] | None = None,
+) -> RAGResult:
+    return rag_engine.retrieval_qa_chain(question, top_k, history, document_ids)
+
+
+def generate_conversation_title(question: str, answer: str) -> str:
+    return rag_engine.generate_title(question, answer)

@@ -5,6 +5,7 @@ from typing import Annotated, Any
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from backend.core.auth import get_current_user
@@ -12,7 +13,12 @@ from backend.db.session import get_db
 from backend.models.conversation import Conversation
 from backend.models.message import Message
 from backend.models.user import User
-from backend.services.rag_engine import RAGResult, retrieval_qa_chain
+from backend.services.memory_service import memory_service
+from backend.services.rag_engine import (
+    RAGResult,
+    generate_conversation_title,
+    retrieval_qa_chain,
+)
 
 router = APIRouter(tags=["query"])
 DbSession = Annotated[Session, Depends(get_db)]
@@ -22,6 +28,7 @@ CurrentUser = Annotated[User, Depends(get_current_user)]
 class AskRequest(BaseModel):
     question: str = Field(min_length=1, max_length=10_000)
     conversation_id: int | None = None
+    document_ids: list[int] | None = Field(default=None, min_length=1)
     top_k: int = Field(default=5, ge=1, le=20)
     stream: bool = False
 
@@ -53,9 +60,10 @@ def ask(
         )
 
     if payload.conversation_id is None:
-        conversation = Conversation(user_id=current_user.id, title=question[:255])
+        conversation = Conversation(user_id=current_user.id, title="New conversation")
         db.add(conversation)
         db.flush()
+        history: list[dict[str, str]] = []
     else:
         conversation = db.get(Conversation, payload.conversation_id)
         if conversation is None or conversation.user_id != current_user.id:
@@ -63,6 +71,22 @@ def ask(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail="Conversation not found",
             )
+        history = memory_service.get_history(conversation.id)
+        if not history:
+            recent_messages = db.scalars(
+                select(Message)
+                .where(Message.conversation_id == conversation.id)
+                .order_by(Message.created_at.desc())
+                .limit(10)
+            ).all()
+            history = [
+                {"role": message.role, "content": message.content}
+                for message in reversed(recent_messages)
+            ]
+            if history:
+                memory_service.replace_history(conversation.id, history)
+
+    first_exchange = not history
 
     db.add(
         Message(
@@ -73,7 +97,17 @@ def ask(
         )
     )
     try:
-        result = retrieval_qa_chain(question, top_k=payload.top_k)
+        result = retrieval_qa_chain(
+            question,
+            top_k=payload.top_k,
+            history=history,
+            document_ids=payload.document_ids,
+        )
+        if first_exchange and conversation.title == "New conversation":
+            try:
+                conversation.title = generate_conversation_title(question, result.answer)
+            except Exception:
+                conversation.title = " ".join(question.split()[:8])[:255]
         db.add(
             Message(
                 conversation_id=conversation.id,
@@ -90,6 +124,11 @@ def ask(
             detail="The knowledge assistant is temporarily unavailable",
         ) from exc
 
+    try:
+        memory_service.add_exchange(conversation.id, question, result.answer)
+    except Exception:
+        pass
+
     if payload.stream:
         return StreamingResponse(
             _stream_result(result, conversation.id),
@@ -101,4 +140,3 @@ def ask(
         citations=result.citations,
         conversation_id=conversation.id,
     )
-
