@@ -1,5 +1,6 @@
 import json
 from collections.abc import Iterator
+from time import perf_counter
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -37,14 +38,18 @@ class AskResponse(BaseModel):
     answer: str
     citations: list[dict[str, Any]]
     conversation_id: int
+    message_id: int
 
 
-def _stream_result(result: RAGResult, conversation_id: int) -> Iterator[str]:
+def _stream_result(
+    result: RAGResult, conversation_id: int, message_id: int
+) -> Iterator[str]:
     for start in range(0, len(result.answer), 120):
         data = json.dumps({"text": result.answer[start : start + 120]})
         yield f"event: answer\ndata: {data}\n\n"
     yield f"event: citations\ndata: {json.dumps(result.citations)}\n\n"
     yield f"event: conversation\ndata: {json.dumps({'conversation_id': conversation_id})}\n\n"
+    yield f"event: message\ndata: {json.dumps({'message_id': message_id})}\n\n"
     yield "event: done\ndata: {}\n\n"
 
 
@@ -97,25 +102,29 @@ def ask(
         )
     )
     try:
+        started_at = perf_counter()
         result = retrieval_qa_chain(
             question,
             top_k=payload.top_k,
             history=history,
             document_ids=payload.document_ids,
         )
+        response_time_ms = (perf_counter() - started_at) * 1000
         if first_exchange and conversation.title == "New conversation":
             try:
                 conversation.title = generate_conversation_title(question, result.answer)
             except Exception:
                 conversation.title = " ".join(question.split()[:8])[:255]
-        db.add(
-            Message(
-                conversation_id=conversation.id,
-                role="assistant",
-                content=result.answer,
-                citations=result.citations,
-            )
+        assistant_message = Message(
+            conversation_id=conversation.id,
+            role="assistant",
+            content=result.answer,
+            citations=result.citations,
+            response_time_ms=response_time_ms,
         )
+        db.add(assistant_message)
+        db.flush()
+        message_id = assistant_message.id
         db.commit()
     except Exception as exc:
         db.rollback()
@@ -131,7 +140,7 @@ def ask(
 
     if payload.stream:
         return StreamingResponse(
-            _stream_result(result, conversation.id),
+            _stream_result(result, conversation.id, message_id),
             media_type="text/event-stream",
             headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
         )
@@ -139,4 +148,5 @@ def ask(
         answer=result.answer,
         citations=result.citations,
         conversation_id=conversation.id,
+        message_id=message_id,
     )

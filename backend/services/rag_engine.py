@@ -36,6 +36,7 @@ class RAGEngineError(RuntimeError):
 @dataclass(frozen=True, slots=True)
 class Citation:
     id: int
+    document_id: int | None
     filename: str
     page: int | None
     slide: int | None
@@ -152,6 +153,7 @@ class RAGEngine:
             metadata = result.get("metadata") or {}
             citation = Citation(
                 id=index,
+                document_id=metadata.get("document_id"),
                 filename=str(metadata.get("filename") or metadata.get("source") or "Unknown document"),
                 page=metadata.get("page"),
                 slide=metadata.get("slide"),
