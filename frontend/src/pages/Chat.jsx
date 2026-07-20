@@ -1,6 +1,7 @@
 import { Alert, Box, Button, Dialog, DialogContent, DialogTitle, Divider, Link, List, ListItemButton, ListItemText, Paper, TextField, Typography } from '@mui/material'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import ReactMarkdown from 'react-markdown'
+import FeedbackModal from '../components/FeedbackModal'
 import useChat from '../hooks/useChat'
 import apiService from '../services/apiService'
 
@@ -14,6 +15,8 @@ export default function Chat() {
   const [conversations, setConversations] = useState([])
   const [question, setQuestion] = useState('')
   const [selectedCitation, setSelectedCitation] = useState(null)
+  const [feedbackMessageId, setFeedbackMessageId] = useState(null)
+  const [ratedMessages, setRatedMessages] = useState(() => new Set())
   const endRef = useRef(null)
 
   const refreshConversations = useCallback(async () => {
@@ -63,6 +66,11 @@ export default function Chat() {
                     ))}
                   </Box>
                 )}
+                {message.role === 'assistant' && typeof message.id === 'number' && (
+                  <Button size="small" sx={{ mt: 1, px: 0 }} onClick={() => setFeedbackMessageId(message.id)} disabled={ratedMessages.has(message.id)}>
+                    {ratedMessages.has(message.id) ? 'Feedback submitted' : 'Rate this response'}
+                  </Button>
+                )}
               </Box>
             </Box>
           ))}
@@ -84,6 +92,7 @@ export default function Chat() {
           {selectedCitation?.score != null && <Typography color="text.secondary">Relevance: {(selectedCitation.score * 100).toFixed(1)}%</Typography>}
         </DialogContent>
       </Dialog>
+      <FeedbackModal open={feedbackMessageId != null} messageId={feedbackMessageId} onClose={() => setFeedbackMessageId(null)} onSubmitted={() => setRatedMessages((items) => new Set(items).add(feedbackMessageId))} />
     </Paper>
   )
 }
