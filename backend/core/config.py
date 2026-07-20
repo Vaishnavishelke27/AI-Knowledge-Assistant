@@ -19,6 +19,8 @@ class Settings(BaseSettings):
     redis_url: str = "redis://localhost:6379/0"
     qdrant_url: str = "http://localhost:6333"
     jwt_secret: str = "replace-with-a-long-random-secret"
+    jwt_algorithm: str = "HS256"
+    access_token_expire_minutes: int = 30
 
 
 @lru_cache
@@ -30,4 +32,3 @@ settings = get_settings()
 
 engine: Engine = create_engine(settings.database_url, pool_pre_ping=True)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
